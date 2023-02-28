@@ -8,6 +8,8 @@ import org.apache.spark.streaming.kafka010.{ConsumerStrategies, KafkaUtils, Loca
 import scala.collection.mutable
 import java.util
 
+import org.apache.kafka.common.TopicPartition
+
 object MyKafkaUtils {
 
   /**
@@ -19,19 +21,20 @@ object MyKafkaUtils {
     ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG -> "org.apache.kafka.common.serialization.StringDeserializer",
     ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG -> "org.apache.kafka.common.serialization.StringDeserializer",
 
+    // 自动提交偏移量
     ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG -> "true",
     ConsumerConfig.AUTO_OFFSET_RESET_CONFIG -> "latest"
   )
 
 
   /**
-   * 获取KafkaDStream对象
+   * 获取KafkaDStream对象，使用默认的offset
    * @param ssc
    * @param topic
    * @param groupId
    * @return
    */
-  def getKafkaDStream(ssc:StreamingContext, topic:String, groupId:String) = {
+  def getKafkaDStream(ssc:StreamingContext, topic:String, groupId:String): InputDStream[ConsumerRecord[String, String]] = {
     // 消费者必须指定消费者组ID
     consumerConf.put(ConsumerConfig.GROUP_ID_CONFIG, groupId)
 
@@ -45,6 +48,20 @@ object MyKafkaUtils {
     //二：将返回值写在最后一行
     kafkaDStream
   }
+
+
+  /**
+   * 使用指定的offset进行消费
+   */
+  def getKafkaDStream(ssc: StreamingContext, topic: String, groupId: String, offsets: Map[TopicPartition, Long]): InputDStream[ConsumerRecord[String, String]] = {
+    consumerConf.put(ConsumerConfig.GROUP_ID_CONFIG, groupId)
+    val kafkaDStream: InputDStream[ConsumerRecord[String, String]] = KafkaUtils.createDirectStream(ssc,
+      LocationStrategies.PreferConsistent, ConsumerStrategies.Subscribe[String, String](Array(topic),
+        consumerConf, offsets))
+    kafkaDStream
+  }
+
+
 
 
   /**

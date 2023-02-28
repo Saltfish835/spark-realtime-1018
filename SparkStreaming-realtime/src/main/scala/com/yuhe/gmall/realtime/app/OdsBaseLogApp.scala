@@ -7,7 +7,9 @@ import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
-import com.yuhe.gmall.realtime.util.MyKafkaUtils
+import com.yuhe.gmall.realtime.util.{MyKafkaUtils, MyOffsetsUtils}
+import org.apache.kafka.common.TopicPartition
+import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 
 object OdsBaseLogApp {
 
@@ -21,12 +23,35 @@ object OdsBaseLogApp {
     val topic: String = "ODS_BASE_LOG_1018"
     val groupId: String = "ODS_BASE_LOG_GROUP_1018"
 
+    //TODO 从redis中读取offset，指定offset进行消费
+    val offsets: Map[TopicPartition, Long] = MyOffsetsUtils.readOffset(topic,groupId)
+    var kafkaDStream: InputDStream[ConsumerRecord[String,String]] = null
+    if(offsets != null && offsets.nonEmpty) {
+      // 指定offset进行消费
+      kafkaDStream = MyKafkaUtils.getKafkaDStream(ssc,topic,groupId,offsets)
+    }else {
+      // 使用默认offset进行消费
+      kafkaDStream = MyKafkaUtils.getKafkaDStream(ssc,topic,groupId)
+    }
+
+
     // 2、获取kafkaDStream对象
-    val kafkaDStream: InputDStream[ConsumerRecord[String,String]] = MyKafkaUtils.getKafkaDStream(ssc,topic,groupId)
+    //val kafkaDStream: InputDStream[ConsumerRecord[String,String]] = MyKafkaUtils.getKafkaDStream(ssc,topic,groupId)
+
+    // TODO 补充：从数据中获取偏移量
+    var offsetRanges: Array[OffsetRange] = null
+    val offsetRangesDStream: DStream[ConsumerRecord[String, String]] = kafkaDStream.transform(
+      rdd => {
+        // 这行代码在Driver端执行，不是在Executor端执行，所以可以定义一个变量来接收
+        offsetRanges = rdd.asInstanceOf[HasOffsetRanges].offsetRanges
+        rdd
+      }
+    )
+
 
     // 3、数据处理
     // 3.1 转换,将字符串转换成JSON对象
-    val jsonObjDStream: DStream[JSONObject] = kafkaDStream.map(consumerRecord => {
+    val jsonObjDStream: DStream[JSONObject] = offsetRangesDStream.map(consumerRecord => {
       val log: String = consumerRecord.value()
       val jsonObj: JSONObject = JSON.parseObject(log)
       // 返回json对象
@@ -148,13 +173,17 @@ object OdsBaseLogApp {
               }
 
             }
+            // foreach里面提交offset？
+            // 这里的代码在executor端执行，而且每处理一条数据都会执行一次这里的语句，也就是每消费一条消息就提交一次offset
           }
         )
+        // foreach外面，foreachRDD外面提交offset？
+        // 这里的代码在Driver端执行，每来一批数据执行一次
+        MyOffsetsUtils.saveOffset(topic,groupId,offsetRanges) // 提交offset
       }
     )
-
-
-
+    // foreachRDD外面提交offset？
+    // 这里的代码在driver端执行，每次启动程序才会执行一次，也就是说每次启动程序提交一次offset
 
     ssc.start()
     ssc.awaitTermination()
